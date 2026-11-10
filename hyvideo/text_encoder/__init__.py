@@ -29,14 +29,32 @@ def load_text_encoder(
             f"Loading text encoder model ({text_encoder_type}) from: {text_encoder_path}"
         )
 
+    def _find_final_norm(model):
+        # 新版 transformers / 不同 LLM 架构的兼容性修复
+        for name, mod in model.named_modules():
+            if 'final_layer_norm' in name and hasattr(mod, 'weight'):
+                return mod
+        for name, mod in model.named_modules():
+            if name.endswith('.norm') and hasattr(mod, 'weight'):
+                return mod
+        return None
+
     if text_encoder_type == "clipL":
         text_encoder = CLIPTextModel.from_pretrained(text_encoder_path)
-        text_encoder.final_layer_norm = text_encoder.text_model.final_layer_norm
+        if hasattr(text_encoder, 'text_model') and hasattr(text_encoder.text_model, 'final_layer_norm'):
+            text_encoder.final_layer_norm = text_encoder.text_model.final_layer_norm
+        else:
+            text_encoder.final_layer_norm = _find_final_norm(text_encoder)
     elif text_encoder_type == "llm":
         text_encoder = AutoModel.from_pretrained(
-            text_encoder_path, low_cpu_mem_usage=True
+            text_encoder_path, low_cpu_mem_usage=True, trust_remote_code=True
         )
-        text_encoder.final_layer_norm = text_encoder.norm
+        if hasattr(text_encoder, 'norm'):
+            text_encoder.final_layer_norm = text_encoder.norm
+        elif hasattr(text_encoder, 'language_model') and hasattr(text_encoder.language_model, 'norm'):
+            text_encoder.final_layer_norm = text_encoder.language_model.norm
+        else:
+            text_encoder.final_layer_norm = _find_final_norm(text_encoder)
     else:
         raise ValueError(f"Unsupported text encoder type: {text_encoder_type}")
     # from_pretrained will ensure that the model is in eval mode.
